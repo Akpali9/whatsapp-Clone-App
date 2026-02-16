@@ -9,7 +9,7 @@ session_start();
 $db_file = 'whatsapp_clone.db';
 
 try {
-   $pdo = new PDO("sqlite:$db_file");
+    $pdo = new PDO("sqlite:$db_file");
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
     // Create tables with WhatsApp-like structure
@@ -34,8 +34,8 @@ try {
             last_message_id INTEGER,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user1_id) REFERENCES users(id),
-            FOREIGN KEY (user2_id) REFERENCES users(id),
+            FOREIGN KEY (user1_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (user2_id) REFERENCES users(id) ON DELETE CASCADE,
             UNIQUE(user1_id, user2_id)
         );
         
@@ -55,8 +55,8 @@ try {
             reply_to_id INTEGER,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
-            FOREIGN KEY (sender_id) REFERENCES users(id),
-            FOREIGN KEY (reply_to_id) REFERENCES messages(id)
+            FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (reply_to_id) REFERENCES messages(id) ON DELETE SET NULL
         );
         
         CREATE TABLE IF NOT EXISTS message_status (
@@ -66,7 +66,8 @@ try {
             status TEXT DEFAULT 'sent',
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
-            FOREIGN KEY (user_id) REFERENCES users(id)
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            UNIQUE(message_id, user_id)
         );
         
         CREATE TABLE IF NOT EXISTS contacts (
@@ -76,8 +77,8 @@ try {
             is_blocked INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, contact_id),
-            FOREIGN KEY (user_id) REFERENCES users(id),
-            FOREIGN KEY (contact_id) REFERENCES users(id)
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (contact_id) REFERENCES users(id) ON DELETE CASCADE
         );
         
         CREATE TABLE IF NOT EXISTS groups (
@@ -87,7 +88,7 @@ try {
             profile_pic TEXT DEFAULT 'group-default.jpg',
             created_by INTEGER NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (created_by) REFERENCES users(id)
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
         );
         
         CREATE TABLE IF NOT EXISTS group_members (
@@ -109,8 +110,8 @@ try {
             start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
             end_time DATETIME,
             duration INTEGER,
-            FOREIGN KEY (caller_id) REFERENCES users(id),
-            FOREIGN KEY (receiver_id) REFERENCES users(id)
+            FOREIGN KEY (caller_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE
         );
         
         CREATE TABLE IF NOT EXISTS status_updates (
@@ -122,7 +123,7 @@ try {
             viewed_count INTEGER DEFAULT 0,
             expires_at DATETIME DEFAULT (datetime('now', '+24 hours')),
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
         
         CREATE TABLE IF NOT EXISTS status_views (
@@ -131,11 +132,25 @@ try {
             viewed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (status_id, viewer_id),
             FOREIGN KEY (status_id) REFERENCES status_updates(id) ON DELETE CASCADE,
-            FOREIGN KEY (viewer_id) REFERENCES users(id)
+            FOREIGN KEY (viewer_id) REFERENCES users(id) ON DELETE CASCADE
         );
+        
+        -- Create indexes for better performance
+        CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+        CREATE INDEX IF NOT EXISTS idx_chats_user1_id ON chats(user1_id);
+        CREATE INDEX IF NOT EXISTS idx_chats_user2_id ON chats(user2_id);
+        CREATE INDEX IF NOT EXISTS idx_chats_updated_at ON chats(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_calls_caller_id ON calls(caller_id);
+        CREATE INDEX IF NOT EXISTS idx_calls_receiver_id ON calls(receiver_id);
+        CREATE INDEX IF NOT EXISTS idx_status_updates_user_id ON status_updates(user_id);
+        CREATE INDEX IF NOT EXISTS idx_status_updates_expires_at ON status_updates(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_message_status_message_id ON message_status(message_id);
+        CREATE INDEX IF NOT EXISTS idx_message_status_user_id ON message_status(user_id);
     ");
     
-    // Create directories
+    // ========== CREATE DIRECTORIES AND DEFAULT IMAGES ==========
     $directories = ['uploads', 'uploads/status', 'uploads/files', 'uploads/wallpapers'];
     foreach ($directories as $dir) {
         if (!file_exists($dir)) {
@@ -143,15 +158,73 @@ try {
         }
     }
     
-    // Create default images
+    // Function to create placeholder images using GD
+    function create_placeholder_image($path, $width, $height, $bgColor, $text) {
+        // Check if GD library is available
+        if (!extension_loaded('gd')) {
+            // If GD not available, create a simple text file as fallback
+            file_put_contents($path, 'Placeholder: ' . $text);
+            return false;
+        }
+        
+        try {
+            $image = imagecreatetruecolor($width, $height);
+            
+            // Convert hex to RGB
+            $bgColor = ltrim($bgColor, '#');
+            if (strlen($bgColor) == 6) {
+                list($r, $g, $b) = sscanf($bgColor, "%02x%02x%02x");
+            } else {
+                // Default WhatsApp colors if hex parsing fails
+                $r = 7; $g = 94; $b = 84; // WhatsApp dark green
+            }
+            
+            $bg = imagecolorallocate($image, $r, $g, $b);
+            $white = imagecolorallocate($image, 255, 255, 255);
+            $black = imagecolorallocate($image, 0, 0, 0);
+            
+            imagefill($image, 0, 0, $bg);
+            
+            // Add text
+            $font_size = 5; // Built-in GD font size
+            $text_width = imagefontwidth($font_size) * strlen($text);
+            $text_height = imagefontheight($font_size);
+            $x = max(0, ($width - $text_width) / 2);
+            $y = max(0, ($height - $text_height) / 2);
+            
+            imagestring($image, $font_size, (int)$x, (int)$y, $text, $white);
+            
+            // Add a simple border/pattern
+            imagerectangle($image, 0, 0, $width-1, $height-1, $white);
+            
+            // Save image
+            imagejpeg($image, $path, 85);
+            imagedestroy($image);
+            
+            return true;
+        } catch (Exception $e) {
+            // Fallback: create empty file
+            file_put_contents($path, '');
+            return false;
+        }
+    }
+    
+    // Create default images if they don't exist
     if (!file_exists('uploads/default.jpg')) {
-        copy('https://via.placeholder.com/200', 'uploads/default.jpg');
+        create_placeholder_image('uploads/default.jpg', 200, 200, '#075E54', 'User');
     }
+    
     if (!file_exists('uploads/group-default.jpg')) {
-        copy('https://via.placeholder.com/200/7289da/ffffff?text=Group', 'uploads/group-default.jpg');
+        create_placeholder_image('uploads/group-default.jpg', 200, 200, '#128C7E', 'Group');
     }
+    
     if (!file_exists('uploads/wallpapers/default-wallpaper.jpg')) {
-        copy('https://via.placeholder.com/800x1200/0A2F44/ffffff?text=WhatsApp', 'uploads/wallpapers/default-wallpaper.jpg');
+        create_placeholder_image('uploads/wallpapers/default-wallpaper.jpg', 800, 1200, '#0A2F44', 'WhatsApp');
+    }
+    
+    // Also create a fallback text file if images fail
+    if (!file_exists('uploads/default.jpg') || filesize('uploads/default.jpg') == 0) {
+        file_put_contents('uploads/default.jpg', '');
     }
     
 } catch(PDOException $e) {
@@ -201,9 +274,6 @@ if ($action == 'api_register') {
         try {
             $stmt = $pdo->prepare("INSERT INTO users (phone_number, username, full_name, password) VALUES (?, ?, ?, ?)");
             $stmt->execute([$phone, $username, $full_name, $password]);
-            
-            // Add default contacts (sample users)
-            $userId = $pdo->lastInsertId();
             
             echo json_encode(['success' => true]);
         } catch(PDOException $e) {

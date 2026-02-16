@@ -1,4 +1,4 @@
-WhatsApp Clone Features Implemented:
+#WhatsApp Clone Features Implemented:
 1. Authentication Screen
 WhatsApp green theme
 
@@ -102,7 +102,3 @@ Message status tracking
 Last seen formatting
 
 This WhatsApp clone captures the essence of WhatsApp Web with its familiar green theme, message bubbles, status updates, and contact management. The UI closely mimics WhatsApp's design while maintaining full functionality.
-
-correct this
- call_type TEXT CHECK(call_type IN ('audio', 'video')),
-H

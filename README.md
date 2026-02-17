@@ -87,5 +87,67 @@ message-deleted	Server → Client	Message deleted notification
 add-reaction	Client → Server	Add reaction to message
 message-reaction	Server → Client	Reaction notification
 contact-status	Server → Client	Contact online/offline status
+
+ How to Run
+Start MySQL in XAMPP
+
+Create the database (run the SQL from previous responses)
+
+Start the WebSocket server:
+
+bash
+node server.js
+Access the application at http://localhost/your-folder/index.php
+
+5. Test Users (created automatically)
+john_doe / test123
+
+jane_smith / test123
+
+bob_wilson / test123
+
+✅ What's Working Now:
+Real-time messaging - Messages appear instantly
+
+Online/offline status - Green dot for online users
+
+Typing indicators - See when someone is typing
+
+Chat list - Shows all conversations with last message
+
+Unread counts - Badge for new messages
+
+Message history - Loads previous messages
+
+Connection status - Visual indicator for WebSocket connection
+
+Responsive design - Works on mobile and desktop
+
+🚨 Common Issues & Solutions:
+If WebSocket doesn't connect:
+Make sure Node.js server is running: node server.js
+
+Check port 3000 is not blocked
+
+Check browser console for errors
+
+If messages don't send:
+Check WebSocket connection status
+
+Verify user is logged in
+
+Check database connection
+
+If database errors:
+Ensure MySQL is running in XAMPP
+
+Database whatsapp_clone should exist
+
+Tables should be created automatically
+
+The chat is now fully real-time with WebSockets!
+
+
+
 The chat is now truly real-time with WebSockets providing instant communication between users!
 

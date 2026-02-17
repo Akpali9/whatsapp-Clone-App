@@ -1,8 +1,4 @@
 <?php
-// ============================================
-// WHATSAPP CLONE - REAL-TIME CHAT
-// ============================================
-
 session_start();
 
 // Database configuration
@@ -11,22 +7,13 @@ $db_name = 'whatsapp_clone';
 $db_user = 'root';
 $db_pass = '';
 
-// WebSocket server URL
-$ws_server = 'http://localhost:3000'; // Node.js server
-
 // Enable error reporting
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 // Create uploads directory
-$upload_dirs = [
-    'uploads', 'uploads/status', 'uploads/files', 'uploads/wallpapers', 
-    'uploads/themes', 'uploads/stories'
-];
-foreach ($upload_dirs as $dir) {
-    if (!file_exists($dir)) {
-        mkdir($dir, 0777, true);
-    }
+if (!file_exists('uploads')) {
+    mkdir('uploads', 0777, true);
 }
 
 // Default profile picture
@@ -35,27 +22,84 @@ if (!file_exists('uploads/default.jpg')) {
 }
 
 try {
-    $pdo = new PDO("mysql:host=$db_host", $db_user, $db_pass);
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    
-    $pdo->exec("CREATE DATABASE IF NOT EXISTS `$db_name` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-    
     $pdo = new PDO("mysql:host=$db_host;dbname=$db_name;charset=utf8mb4", $db_user, $db_pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
     
-    // Create tables (same as before)
-    // ... (keep all table creation code from previous version)
-    
 } catch(PDOException $e) {
-    die("Database Error: " . $e->getMessage());
+    die("Database connection failed: " . $e->getMessage());
 }
 
-// ============================================
-// API ROUTES (keep all existing API routes)
-// ============================================
+// Helper functions
+function isLoggedIn() {
+    return isset($_SESSION['user_id']);
+}
 
-// Add new API endpoint to get WebSocket token
+function getUserById($id) {
+    global $pdo;
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+    $stmt->execute([$id]);
+    return $stmt->fetch();
+}
+
+// API Routes
+$action = $_GET['action'] ?? 'home';
+
+// Login API
+if ($action == 'api_login') {
+    header('Content-Type: application/json');
+    
+    if ($_SERVER['REQUEST_METHOD'] != 'POST') {
+        echo json_encode(['success' => false, 'error' => 'Invalid request']);
+        exit;
+    }
+    
+    $identifier = $_POST['identifier'] ?? '';
+    $password = $_POST['password'] ?? '';
+    
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ? OR phone_number = ?");
+    $stmt->execute([$identifier, $identifier]);
+    $user = $stmt->fetch();
+    
+    if ($user && password_verify($password, $user['password'])) {
+        $_SESSION['user_id'] = $user['id'];
+        $_SESSION['username'] = $user['username'];
+        
+        unset($user['password']);
+        echo json_encode(['success' => true, 'user' => $user]);
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Invalid credentials']);
+    }
+    exit;
+}
+
+// Logout API
+if ($action == 'api_logout') {
+    session_destroy();
+    echo json_encode(['success' => true]);
+    exit;
+}
+
+// Get current user
+if ($action == 'api_get_current_user') {
+    header('Content-Type: application/json');
+    
+    if (!isLoggedIn()) {
+        echo json_encode(['logged_in' => false]);
+        exit;
+    }
+    
+    $user = getUserById($_SESSION['user_id']);
+    if ($user) {
+        unset($user['password']);
+        echo json_encode(['logged_in' => true, 'user' => $user]);
+    } else {
+        echo json_encode(['logged_in' => false]);
+    }
+    exit;
+}
+
+// Get WebSocket token
 if ($action == 'api_get_ws_token') {
     header('Content-Type: application/json');
     
@@ -66,12 +110,13 @@ if ($action == 'api_get_ws_token') {
     
     $userId = $_SESSION['user_id'];
     
-    // Make request to Node.js server to get token
-    $ch = curl_init("$ws_server/api/auth/token");
+    // Call your Node.js server to get token
+    $ch = curl_init('http://localhost:3000/api/auth/token');
     curl_setopt($ch, CURLOPT_POST, 1);
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['userId' => $userId]));
     curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 5);
     
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -81,26 +126,21 @@ if ($action == 'api_get_ws_token') {
         $data = json_decode($response, true);
         echo json_encode(['success' => true, 'token' => $data['token']]);
     } else {
-        echo json_encode(['error' => 'Failed to get token']);
+        echo json_encode(['error' => 'Could not connect to chat server']);
     }
     exit;
 }
-
-// Keep all other API routes from previous version...
-// (Include all the API endpoints we had before)
-
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WhatsApp Clone - Real-time Chat</title>
+    <title>Real-time WhatsApp Clone</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
-        /* Keep all existing styles */
         * {
             margin: 0;
             padding: 0;
@@ -118,83 +158,220 @@ if ($action == 'api_get_ws_token') {
             --bg-secondary: #ffffff;
             --text-primary: #111b21;
             --text-secondary: #667781;
-            --border-color: #e9edef;
-        }
-
-        [data-theme="dark"] {
-            --bg-primary: #111b21;
-            --bg-secondary: #202c33;
-            --text-primary: #e9edef;
-            --text-secondary: #8696a0;
-            --border-color: #2a3942;
-            --sent-message: #005c4b;
-            --received-message: #202c33;
-            --header-bg: #1f2c33;
         }
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             height: 100vh;
             overflow: hidden;
-            margin: 0;
-            padding: 0;
-            background: #0f2027;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         }
 
         .app-wrapper {
             max-width: 1400px;
-            margin: 10px auto;
-            height: calc(100vh - 20px);
+            margin: 20px auto;
+            height: calc(100vh - 40px);
             background: var(--bg-secondary);
             border-radius: 20px;
             overflow: hidden;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         }
 
-        /* Typing indicator */
-        .typing-indicator {
+        /* Auth Screen */
+        .auth-screen {
+            display: flex;
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .auth-left {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            padding: 40px;
+        }
+
+        .auth-left i {
+            font-size: 8rem;
+            margin-bottom: 30px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .auth-left h1 {
+            font-size: 3rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+        }
+
+        .auth-right {
+            width: 450px;
+            background: white;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .auth-tabs {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #f0f0f0;
+            padding-bottom: 10px;
+        }
+
+        .auth-tab {
+            flex: 1;
+            text-align: center;
+            padding: 10px;
+            cursor: pointer;
+            color: #666;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .auth-tab.active {
+            color: var(--whatsapp-teal);
+            border-bottom: 2px solid var(--whatsapp-teal);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-control {
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 12px 15px;
+            font-size: 14px;
+            transition: all 0.3s;
+            width: 100%;
+        }
+
+        .form-control:focus {
+            border-color: var(--whatsapp-teal);
+            box-shadow: 0 0 0 3px rgba(18, 140, 126, 0.1);
+            outline: none;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, var(--whatsapp-teal), var(--whatsapp-dark-green));
+            border: none;
+            padding: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 8px;
+            color: white;
+            width: 100%;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(18, 140, 126, 0.3);
+        }
+
+        /* Main App */
+        .main-app {
+            display: flex;
+            height: 100%;
+            background: var(--bg-primary);
+        }
+
+        .sidebar {
+            width: 350px;
+            background: var(--bg-secondary);
+            border-right: 1px solid #e9edef;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .sidebar-header {
+            background: var(--header-bg);
+            color: white;
+            padding: 10px 15px;
             display: flex;
             align-items: center;
-            gap: 3px;
-            padding: 5px 10px;
-            background: var(--bg-secondary);
-            border-radius: 20px;
-            width: fit-content;
-            margin-top: 5px;
+            justify-content: space-between;
         }
 
-        .typing-indicator span {
-            width: 8px;
-            height: 8px;
-            background: var(--text-secondary);
+        .profile-thumb {
+            width: 45px;
+            height: 45px;
             border-radius: 50%;
-            animation: typing 1.4s infinite ease-in-out;
+            object-fit: cover;
+            cursor: pointer;
         }
 
-        .typing-indicator span:nth-child(2) {
-            animation-delay: 0.2s;
+        .connection-status {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ff4444;
+            transition: background 0.3s;
         }
 
-        .typing-indicator span:nth-child(3) {
-            animation-delay: 0.4s;
+        .connection-status.connected {
+            background: #4caf50;
+            animation: pulse 2s infinite;
         }
 
-        @keyframes typing {
-            0%, 60%, 100% { transform: translateY(0); }
-            30% { transform: translateY(-5px); }
+        .search-box {
+            padding: 10px;
+            background: var(--bg-primary);
         }
 
-        /* Message status indicators */
-        .message-status {
-            font-size: 12px;
-            margin-left: 5px;
+        .search-box input {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 20px;
+            outline: none;
         }
 
-        .status-sent { color: #8696a0; }
-        .status-delivered { color: #8696a0; }
-        .status-read { color: #4fc3f7; }
+        .chats-list {
+            flex: 1;
+            overflow-y: auto;
+        }
 
-        /* Online status */
+        .chat-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 15px;
+            cursor: pointer;
+            transition: background 0.3s;
+            border-bottom: 1px solid #e9edef;
+        }
+
+        .chat-item:hover {
+            background: rgba(0,0,0,0.05);
+        }
+
+        .chat-item.active {
+            background: rgba(18, 140, 126, 0.1);
+        }
+
+        .chat-avatar-container {
+            position: relative;
+            margin-right: 15px;
+        }
+
+        .chat-avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+
         .online-indicator {
             position: absolute;
             bottom: 2px;
@@ -204,616 +381,415 @@ if ($action == 'api_get_ws_token') {
             background: #4caf50;
             border-radius: 50%;
             border: 2px solid var(--bg-secondary);
-            animation: pulse 2s infinite;
+            display: none;
         }
 
-        @keyframes pulse {
-            0% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7); }
-            70% { box-shadow: 0 0 0 5px rgba(76, 175, 80, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+        .online-indicator.online {
+            display: block;
         }
 
-        /* Keep all other styles from previous version */
-        /* ... (include all CSS from previous version) ... */
+        .chat-info {
+            flex: 1;
+        }
+
+        .chat-name {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .chat-last-message {
+            font-size: 13px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .chat-time {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .unread-badge {
+            background: var(--whatsapp-green);
+            color: white;
+            border-radius: 50%;
+            min-width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            margin-left: 10px;
+        }
+
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-primary);
+        }
+
+        .chat-header {
+            background: var(--bg-secondary);
+            padding: 10px 15px;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid #e9edef;
+        }
+
+        .chat-header-avatar {
+            width: 45px;
+            height: 45px;
+            border-radius: 50%;
+            object-fit: cover;
+            margin-right: 15px;
+        }
+
+        .chat-header-info {
+            flex: 1;
+        }
+
+        .chat-header-info h5 {
+            margin: 0;
+            color: var(--text-primary);
+        }
+
+        .chat-header-info small {
+            color: var(--text-secondary);
+        }
+
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .message-wrapper {
+            display: flex;
+            margin-bottom: 10px;
+        }
+
+        .message-wrapper.sent {
+            justify-content: flex-end;
+        }
+
+        .message-wrapper.received {
+            justify-content: flex-start;
+        }
+
+        .message-bubble {
+            max-width: 65%;
+            padding: 10px 15px;
+            border-radius: 10px;
+            position: relative;
+        }
+
+        .sent .message-bubble {
+            background: var(--sent-message);
+            border-top-right-radius: 0;
+        }
+
+        .received .message-bubble {
+            background: var(--received-message);
+            border-top-left-radius: 0;
+        }
+
+        .message-time {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 5px;
+            text-align: right;
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 3px;
+            padding: 10px 15px;
+            background: var(--bg-secondary);
+            border-radius: 20px;
+            width: fit-content;
+            margin-bottom: 10px;
+        }
+
+        .typing-indicator span {
+            width: 8px;
+            height: 8px;
+            background: var(--text-secondary);
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-5px); }
+        }
+
+        .message-input-area {
+            background: var(--bg-secondary);
+            padding: 10px 15px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .message-input-wrapper {
+            flex: 1;
+            background: var(--bg-primary);
+            border-radius: 25px;
+            padding: 10px 20px;
+        }
+
+        .message-input-wrapper input {
+            width: 100%;
+            border: none;
+            outline: none;
+            background: transparent;
+            color: var(--text-primary);
+        }
+
+        .send-button {
+            background: var(--whatsapp-teal);
+            color: white;
+            width: 45px;
+            height: 45px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .send-button:hover {
+            transform: scale(1.1);
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            text-align: center;
+            padding: 20px;
+        }
+
+        .new-chat-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: var(--whatsapp-teal);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            transition: all 0.3s;
+        }
+
+        .new-chat-btn:hover {
+            transform: scale(1.1);
+        }
+
+        .toast-notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 25px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            z-index: 9999;
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast-success { background: #4caf50; }
+        .toast-error { background: #f44336; }
+        .toast-info { background: #2196f3; }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        @media (max-width: 768px) {
+            .app-wrapper {
+                margin: 0;
+                height: 100vh;
+                border-radius: 0;
+            }
+            .auth-left {
+                display: none;
+            }
+            .auth-right {
+                width: 100%;
+            }
+            .sidebar {
+                width: 100%;
+                position: absolute;
+                left: 0;
+                top: 0;
+                bottom: 0;
+                z-index: 10;
+                transform: translateX(0);
+            }
+            .sidebar.hidden {
+                transform: translateX(-100%);
+            }
+            .chat-area {
+                width: 100%;
+            }
+            .back-button {
+                display: block;
+            }
+        }
     </style>
 </head>
-<body data-theme="light">
+<body>
     <div class="app-wrapper">
-        <!-- Auth Screen (same as before) -->
+        <!-- Auth Screen -->
         <div id="authScreen" class="auth-screen">
-            <!-- ... (keep auth screen HTML) ... -->
+            <div class="auth-left">
+                <i class="fab fa-whatsapp"></i>
+                <h1>WhatsApp Clone</h1>
+                <p>Real-time messaging with WebSockets</p>
+            </div>
+            <div class="auth-right">
+                <div class="auth-tabs">
+                    <div class="auth-tab active" onclick="switchTab('login')">Login</div>
+                    <div class="auth-tab" onclick="switchTab('register')">Register</div>
+                </div>
+                
+                <!-- Login Form -->
+                <div id="loginForm">
+                    <div class="form-group">
+                        <input type="text" class="form-control" id="loginIdentifier" placeholder="Username or Phone">
+                    </div>
+                    <div class="form-group">
+                        <input type="password" class="form-control" id="loginPassword" placeholder="Password">
+                    </div>
+                    <button class="btn-success" onclick="handleLogin()" id="loginBtn">
+                        Login
+                    </button>
+                </div>
+                
+                <!-- Register Form -->
+                <div id="registerForm" style="display: none;">
+                    <div class="form-group">
+                        <input type="text" class="form-control" id="regFullName" placeholder="Full Name">
+                    </div>
+                    <div class="form-group">
+                        <input type="text" class="form-control" id="regUsername" placeholder="Username">
+                    </div>
+                    <div class="form-group">
+                        <input type="text" class="form-control" id="regPhone" placeholder="Phone Number">
+                    </div>
+                    <div class="form-group">
+                        <input type="password" class="form-control" id="regPassword" placeholder="Password">
+                    </div>
+                    <button class="btn-success" onclick="handleRegister()" id="registerBtn">
+                        Register
+                    </button>
+                </div>
+            </div>
         </div>
         
-        <!-- Main App with Real-time Features -->
+        <!-- Main App -->
         <div id="mainApp" class="main-app" style="display: none;">
             <!-- Sidebar -->
             <div class="sidebar" id="sidebar">
                 <div class="sidebar-header">
-                    <img id="profilePic" src="uploads/default.jpg" alt="Profile" class="profile-thumb" onclick="showProfileSettings()">
-                    <span class="app-title">WhatsApp</span>
-                    <div class="header-icons">
-                        <div class="online-status-dot" id="connectionStatus" title="Connected"></div>
-                        <i class="fas fa-circle" onclick="switchMainTab('status')" title="Status"></i>
-                        <i class="fas fa-cog" onclick="showSettings()" title="Settings"></i>
-                        <i class="fas fa-sign-out-alt" onclick="logout()" title="Logout"></i>
-                    </div>
-                </div>
-                
-                <div class="sidebar-tabs">
-                    <div class="sidebar-tab active" onclick="switchMainTab('chats')">
-                        <i class="fas fa-comment"></i> Chats
-                    </div>
-                    <div class="sidebar-tab" onclick="switchMainTab('status')">
-                        <i class="fas fa-circle"></i> Status
-                    </div>
-                    <div class="sidebar-tab" onclick="switchMainTab('calls')">
-                        <i class="fas fa-phone"></i> Calls
-                    </div>
+                    <img id="profilePic" src="uploads/default.jpg" class="profile-thumb">
+                    <span>WhatsApp</span>
+                    <div class="connection-status" id="connectionStatus"></div>
                 </div>
                 
                 <div class="search-box">
-                    <input type="text" id="searchInput" placeholder="Search..." onkeyup="handleSearch(this.value)">
+                    <input type="text" id="searchInput" placeholder="Search chats...">
                 </div>
                 
-                <!-- Chats List -->
                 <div id="chatsList" class="chats-list"></div>
-                
-                <!-- Status List -->
-                <div id="statusList" class="chats-list" style="display: none;"></div>
-                
-                <!-- Calls List -->
-                <div id="callsList" class="chats-list" style="display: none;"></div>
             </div>
             
-            <!-- Chat Area with Real-time Features -->
+            <!-- Chat Area -->
             <div class="chat-area" id="chatArea">
                 <div class="empty-state">
-                    <i class="fab fa-whatsapp"></i>
-                    <h4>Real-time WhatsApp Clone</h4>
+                    <i class="fab fa-whatsapp" style="font-size: 5rem;"></i>
+                    <h3>Welcome to WhatsApp Clone</h3>
                     <p id="welcomeUser"></p>
                     <p>Select a chat to start messaging</p>
-                    <small class="text-muted" id="connectionStatusText">Connecting...</small>
                 </div>
             </div>
             
             <!-- New Chat Button -->
-            <div class="new-chat-btn" onclick="showNewChatModal()">
+            <div class="new-chat-btn" onclick="showNewChat()">
                 <i class="fas fa-plus"></i>
             </div>
         </div>
     </div>
     
-    <!-- Keep all modals from previous version -->
-    <!-- New Chat Modal, Profile Modal, Status Modal, etc. -->
+    <!-- New Chat Modal -->
+    <div class="modal fade" id="newChatModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">New Chat</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="text" class="form-control" id="userSearch" placeholder="Search users...">
+                    <div id="searchResults" style="margin-top: 10px; max-height: 300px; overflow-y: auto;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
     
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // ========== GLOBAL VARIABLES ==========
+        // Global variables
         let currentUser = null;
         let currentChat = null;
-        let currentStatusGroup = null;
-        let chats = [];
-        let messages = [];
         let socket = null;
         let socketConnected = false;
         let typingTimeout = null;
-        let messageQueue = [];
-        let unreadMessages = new Map();
+        let chats = [];
+        let messages = [];
+        let newChatModal = null;
         
-        // ========== WEBSOCKET CONNECTION ==========
-        async function connectWebSocket() {
-            try {
-                // Get token from server
-                const response = await fetch('?action=api_get_ws_token');
-                const data = await response.json();
-                
-                if (data.error) {
-                    showToast('Failed to connect to chat server', 'error');
-                    updateConnectionStatus(false);
-                    return;
-                }
-                
-                // Connect to WebSocket server
-                socket = io('http://localhost:3000', {
-                    auth: {
-                        token: data.token
-                    },
-                    transports: ['websocket'],
-                    reconnection: true,
-                    reconnectionDelay: 1000,
-                    reconnectionDelayMax: 5000,
-                    reconnectionAttempts: 5
-                });
-                
-                // Connection events
-                socket.on('connect', () => {
-                    console.log('Connected to WebSocket server');
-                    socketConnected = true;
-                    updateConnectionStatus(true);
-                    showToast('Connected to chat server', 'success');
-                    
-                    // Send any queued messages
-                    sendQueuedMessages();
-                });
-                
-                socket.on('disconnect', () => {
-                    console.log('Disconnected from WebSocket server');
-                    socketConnected = false;
-                    updateConnectionStatus(false);
-                    showToast('Disconnected from chat server', 'error');
-                });
-                
-                socket.on('connect_error', (error) => {
-                    console.error('Connection error:', error);
-                    socketConnected = false;
-                    updateConnectionStatus(false);
-                });
-                
-                // ========== REAL-TIME MESSAGE HANDLERS ==========
-                
-                // Message sent confirmation
-                socket.on('message-sent', (data) => {
-                    if (data.success) {
-                        // Add message to current chat
-                        messages.push(data.message);
-                        if (currentChat && currentChat.id === data.chatId) {
-                            renderMessages();
-                        }
-                        
-                        // Update chat list
-                        updateChatLastMessage(data.chatId, data.message);
-                    }
-                });
-                
-                // New message received
-                socket.on('new-message', (data) => {
-                    const { chatId, message } = data;
-                    
-                    // Add to messages if it's current chat
-                    if (currentChat && currentChat.id === chatId) {
-                        messages.push(message);
-                        renderMessages();
-                        
-                        // Mark as read immediately
-                        markMessagesAsRead([message.id]);
-                    } else {
-                        // Increment unread count
-                        const chat = chats.find(c => c.id === chatId);
-                        if (chat) {
-                            chat.unread_count = (chat.unread_count || 0) + 1;
-                            renderChats();
-                            
-                            // Show notification
-                            showNotification(chat.partner.name, message.message);
-                        }
-                    }
-                    
-                    // Update chat list
-                    updateChatLastMessage(chatId, message);
-                });
-                
-                // Typing indicator
-                socket.on('user-typing', (data) => {
-                    const { chatId, userId, isTyping } = data;
-                    
-                    if (currentChat && currentChat.id === chatId) {
-                        const typingDiv = document.getElementById('typingIndicator');
-                        if (isTyping) {
-                            if (!typingDiv) {
-                                const indicator = document.createElement('div');
-                                indicator.id = 'typingIndicator';
-                                indicator.className = 'typing-indicator';
-                                indicator.innerHTML = '<span></span><span></span><span></span>';
-                                document.getElementById('messagesContainer').appendChild(indicator);
-                            }
-                        } else {
-                            if (typingDiv) {
-                                typingDiv.remove();
-                            }
-                        }
-                    }
-                });
-                
-                // Messages read
-                socket.on('messages-read', (data) => {
-                    const { chatId, messageIds } = data;
-                    
-                    if (currentChat && currentChat.id === chatId) {
-                        // Update message status in UI
-                        messages.forEach(msg => {
-                            if (messageIds.includes(msg.id)) {
-                                msg.is_read = 1;
-                            }
-                        });
-                        renderMessages();
-                    }
-                });
-                
-                // Chat updated (for list refresh)
-                socket.on('chat-updated', (data) => {
-                    loadChats();
-                });
-                
-                // New chat created
-                socket.on('new-chat', (data) => {
-                    loadChats();
-                });
-                
-                // Message deleted
-                socket.on('message-deleted', (data) => {
-                    const { messageId, chatId } = data;
-                    
-                    if (currentChat && currentChat.id === chatId) {
-                        messages = messages.filter(m => m.id !== messageId);
-                        renderMessages();
-                    }
-                });
-                
-                // Message reaction
-                socket.on('message-reaction', (data) => {
-                    const { messageId, userId, reaction } = data;
-                    // Handle reaction display
-                });
-                
-                // Contact status update
-                socket.on('contact-status', (data) => {
-                    const { userId, status, lastSeen } = data;
-                    
-                    // Update chat list
-                    chats.forEach(chat => {
-                        if (chat.partner.id === userId) {
-                            chat.partner.status = status;
-                            chat.partner.lastSeen = lastSeen;
-                        }
-                    });
-                    renderChats();
-                    
-                    // Update current chat header if open
-                    if (currentChat && currentChat.partner.id === userId) {
-                        updateChatHeader();
-                    }
-                });
-                
-            } catch (error) {
-                console.error('WebSocket connection error:', error);
-                updateConnectionStatus(false);
-            }
-        }
-        
-        // Update connection status in UI
-        function updateConnectionStatus(connected) {
-            const statusDot = document.getElementById('connectionStatus');
-            const statusText = document.getElementById('connectionStatusText');
-            
-            if (statusDot) {
-                statusDot.style.background = connected ? '#4caf50' : '#ff4444';
-                statusDot.style.width = '10px';
-                statusDot.style.height = '10px';
-                statusDot.style.borderRadius = '50%';
-                statusDot.style.marginRight = '10px';
-            }
-            
-            if (statusText) {
-                statusText.textContent = connected ? 'Connected' : 'Disconnected - Reconnecting...';
-                statusText.style.color = connected ? '#4caf50' : '#ff4444';
-            }
-        }
-        
-        // Queue message when offline
-        function queueMessage(chatId, message) {
-            messageQueue.push({
-                chatId,
-                message,
-                timestamp: Date.now()
-            });
-            showToast('Message queued - will send when connected', 'info');
-        }
-        
-        // Send queued messages
-        function sendQueuedMessages() {
-            if (!socketConnected || messageQueue.length === 0) return;
-            
-            messageQueue.forEach(async (queued) => {
-                await sendMessageWithSocket(queued.chatId, queued.message);
-            });
-            messageQueue = [];
-        }
-        
-        // Send message via socket
-        function sendMessageWithSocket(chatId, message, replyToId = null) {
-            return new Promise((resolve, reject) => {
-                if (!socketConnected) {
-                    queueMessage(chatId, message);
-                    resolve({ queued: true });
-                    return;
-                }
-                
-                socket.emit('send-message', {
-                    chatId,
-                    message,
-                    replyToId
-                }, (response) => {
-                    if (response && response.error) {
-                        reject(response.error);
-                    } else {
-                        resolve(response);
-                    }
-                });
-            });
-        }
-        
-        // Mark messages as read
-        function markMessagesAsRead(messageIds) {
-            if (!socketConnected || !currentChat) return;
-            
-            socket.emit('mark-read', {
-                chatId: currentChat.id,
-                messageIds
-            });
-        }
-        
-        // Send typing indicator
-        function sendTypingIndicator(isTyping) {
-            if (!socketConnected || !currentChat) return;
-            
-            socket.emit('typing', {
-                chatId: currentChat.id,
-                isTyping
-            });
-        }
-        
-        // Show browser notification
-        function showNotification(title, body) {
-            if (!("Notification" in window)) return;
-            
-            if (Notification.permission === "granted") {
-                new Notification(title, { body });
-            } else if (Notification.permission !== "denied") {
-                Notification.requestPermission().then(permission => {
-                    if (permission === "granted") {
-                        new Notification(title, { body });
-                    }
-                });
-            }
-        }
-        
-        // ========== OVERRIDE EXISTING FUNCTIONS FOR REAL-TIME ==========
-        
-        // Override sendMessage function
-        async function sendMessage() {
-            const input = document.getElementById('messageInput');
-            const message = input.value.trim();
-            
-            if (!message || !currentChat) return;
-            
-            // Optimistically add message to UI
-            const tempMessage = {
-                id: 'temp-' + Date.now(),
-                chat_id: currentChat.id,
-                sender_id: currentUser.id,
-                message: message,
-                created_at: new Date().toISOString(),
-                is_read: 0,
-                is_delivered: 0,
-                full_name: currentUser.full_name,
-                profile_pic: currentUser.profile_pic
-            };
-            
-            messages.push(tempMessage);
-            renderMessages();
-            input.value = '';
-            
-            // Send via WebSocket
-            try {
-                await sendMessageWithSocket(currentChat.id, message);
-            } catch (error) {
-                console.error('Error sending message:', error);
-                showToast('Failed to send message', 'error');
-                // Remove temp message on failure
-                messages = messages.filter(m => m.id !== tempMessage.id);
-                renderMessages();
-            }
-        }
-        
-        // Override handleKeyPress to add typing indicator
-        function handleKeyPress(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-            
-            // Typing indicator
-            if (typingTimeout) clearTimeout(typingTimeout);
-            sendTypingIndicator(true);
-            
-            typingTimeout = setTimeout(() => {
-                sendTypingIndicator(false);
-            }, 1000);
-        }
-        
-        // Override selectChat to mark messages as read
-        async function selectChat(chat) {
-            currentChat = chat;
-            
-            // Mark unread messages as read
-            const unreadMessageIds = messages
-                .filter(m => !m.is_read && m.sender_id !== currentUser.id)
-                .map(m => m.id);
-            
-            if (unreadMessageIds.length > 0) {
-                markMessagesAsRead(unreadMessageIds);
-            }
-            
-            // Rest of existing selectChat function
-            renderChats();
-            
-            document.getElementById('chatArea').innerHTML = `
-                <div class="chat-header">
-                    <button class="back-button" onclick="showChatList()">
-                        <i class="fas fa-arrow-left"></i>
-                    </button>
-                    <img src="uploads/${chat.partner.pic || 'default.jpg'}" class="chat-header-avatar">
-                    <div class="chat-header-info">
-                        <h5>${escapeHtml(chat.partner.name)}</h5>
-                        <small id="chatStatus">${chat.partner.status === 'online' ? '🟢 online' : '○ offline'}</small>
-                    </div>
-                    <div class="chat-header-actions">
-                        <i class="fas fa-phone" onclick="startCall('audio')" title="Audio Call"></i>
-                        <i class="fas fa-video" onclick="startCall('video')" title="Video Call"></i>
-                    </div>
-                </div>
-                <div class="messages-container" id="messagesContainer"></div>
-                <div class="message-input-area">
-                    <div class="message-input-wrapper">
-                        <input type="text" id="messageInput" placeholder="Type a message" onkeypress="handleKeyPress(event)">
-                    </div>
-                    <div class="send-button" onclick="sendMessage()">
-                        <i class="fas fa-paper-plane"></i>
-                    </div>
-                </div>
-            `;
-            
-            loadMessages(chat.id);
-            
-            if (window.innerWidth <= 768) {
-                document.getElementById('sidebar').classList.add('hidden');
-            }
-        }
-        
-        // Update chat header with real-time status
-        function updateChatHeader() {
-            const statusElement = document.getElementById('chatStatus');
-            if (statusElement && currentChat) {
-                statusElement.innerHTML = currentChat.partner.status === 'online' ? 
-                    '🟢 online' : '○ offline';
-            }
-        }
-        
-        // Update chat list with new message
-        function updateChatLastMessage(chatId, message) {
-            const chat = chats.find(c => c.id === chatId);
-            if (chat) {
-                chat.last_message = message.message;
-                chat.last_message_time = formatTime(message.created_at);
-                chat.last_sender_id = message.sender_id;
-                renderChats();
-            }
-        }
-        
-        // Override renderMessages to add status indicators
-        function renderMessages() {
-            const container = document.getElementById('messagesContainer');
-            if (!container) return;
-            
-            container.innerHTML = '';
-            
-            messages.forEach(msg => {
-                if (msg.deleted_for_everyone) return;
-                if (msg.deleted_for_me && msg.sender_id !== currentUser.id) return;
-                
-                const isSent = msg.sender_id == currentUser.id;
-                const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                
-                let statusIcon = '';
-                let statusClass = '';
-                
-                if (isSent) {
-                    if (msg.is_read) {
-                        statusIcon = '<i class="fas fa-check-double status-read"></i>';
-                        statusClass = 'status-read';
-                    } else if (msg.is_delivered) {
-                        statusIcon = '<i class="fas fa-check-double status-delivered"></i>';
-                        statusClass = 'status-delivered';
-                    } else {
-                        statusIcon = '<i class="fas fa-check status-sent"></i>';
-                        statusClass = 'status-sent';
-                    }
-                }
-                
-                const messageDiv = document.createElement('div');
-                messageDiv.className = `message-wrapper ${isSent ? 'sent' : 'received'}`;
-                messageDiv.id = `message-${msg.id}`;
-                
-                messageDiv.innerHTML = `
-                    <div class="message-bubble">
-                        <div>${escapeHtml(msg.message)}</div>
-                        <div class="message-time">
-                            <span>${time}</span>
-                            ${statusIcon ? `<span class="message-status ${statusClass}">${statusIcon}</span>` : ''}
-                        </div>
-                    </div>
-                `;
-                
-                container.appendChild(messageDiv);
-            });
-            
-            container.scrollTop = container.scrollHeight;
-            
-            // Mark visible messages as read
-            if (currentChat && messages.length > 0) {
-                const unreadIds = messages
-                    .filter(m => !m.is_read && m.sender_id !== currentUser.id)
-                    .map(m => m.id);
-                
-                if (unreadIds.length > 0) {
-                    markMessagesAsRead(unreadIds);
-                }
-            }
-        }
-        
-        // ========== INITIALIZATION ==========
+        // Initialize
         window.onload = function() {
             checkSession();
-            
-            // Request notification permission
-            if ("Notification" in window) {
-                Notification.requestPermission();
-            }
+            newChatModal = new bootstrap.Modal(document.getElementById('newChatModal'));
         };
         
-        // Override checkSession to connect WebSocket after login
-        async function checkSession() {
-            try {
-                const response = await fetch('?action=api_get_current_user');
-                const data = await response.json();
-                
-                if (data.logged_in && data.user) {
-                    currentUser = data.user;
-                    document.getElementById('authScreen').style.display = 'none';
-                    document.getElementById('mainApp').style.display = 'flex';
-                    document.getElementById('profilePic').src = 'uploads/' + (currentUser.profile_pic || 'default.jpg');
-                    document.getElementById('myStatusPic').src = 'uploads/' + (currentUser.profile_pic || 'default.jpg');
-                    document.getElementById('welcomeUser').innerHTML = `Welcome back, ${currentUser.full_name}!`;
-                    
-                    if (currentUser.theme) {
-                        applyTheme(currentUser.theme);
-                    }
-                    
-                    // Connect to WebSocket
-                    await connectWebSocket();
-                    
-                    loadChats();
-                    loadStatus();
-                }
-            } catch (error) {
-                console.error('Session check error:', error);
+        // Auth functions
+        function switchTab(tab) {
+            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+            if (tab === 'login') {
+                document.querySelector('.auth-tab:first-child').classList.add('active');
+                document.getElementById('loginForm').style.display = 'block';
+                document.getElementById('registerForm').style.display = 'none';
+            } else {
+                document.querySelector('.auth-tab:last-child').classList.add('active');
+                document.getElementById('loginForm').style.display = 'none';
+                document.getElementById('registerForm').style.display = 'block';
             }
         }
         
-        // Override handleLogin to connect WebSocket after login
         async function handleLogin() {
-            clearFieldErrors();
-            clearAlerts();
-            
-            const identifier = document.getElementById('loginIdentifier').value.trim();
+            const identifier = document.getElementById('loginIdentifier').value;
             const password = document.getElementById('loginPassword').value;
-            
-            if (!identifier || !password) {
-                showToast('Please fill in all fields', 'error');
-                return;
-            }
-            
-            setLoading('loginBtn', true);
             
             const formData = new FormData();
             formData.append('identifier', identifier);
@@ -828,56 +804,345 @@ if ($action == 'api_get_ws_token') {
                 
                 if (data.success) {
                     currentUser = data.user;
-                    showToast('Login successful!', 'success');
-                    
                     document.getElementById('authScreen').style.display = 'none';
                     document.getElementById('mainApp').style.display = 'flex';
                     document.getElementById('profilePic').src = 'uploads/' + (currentUser.profile_pic || 'default.jpg');
-                    document.getElementById('myStatusPic').src = 'uploads/' + (currentUser.profile_pic || 'default.jpg');
-                    document.getElementById('welcomeUser').innerHTML = `Welcome, ${currentUser.full_name}!`;
+                    document.getElementById('welcomeUser').innerText = `Welcome, ${currentUser.full_name}!`;
                     
-                    if (currentUser.theme) {
-                        applyTheme(currentUser.theme);
-                    }
-                    
-                    // Connect to WebSocket
                     await connectWebSocket();
-                    
                     loadChats();
-                    loadStatus();
                 } else {
-                    document.getElementById('loginAlert').innerHTML = data.error || 'Login failed';
-                    document.getElementById('loginAlert').style.display = 'block';
+                    alert(data.error || 'Login failed');
                 }
             } catch (error) {
                 console.error('Login error:', error);
-                showToast('Login failed. Please try again.', 'error');
-            } finally {
-                setLoading('loginBtn', false);
+                alert('Login failed');
             }
         }
         
-        // Override logout to disconnect WebSocket
-        async function logout() {
-            if (socket) {
-                socket.disconnect();
+        async function handleRegister() {
+            const fullName = document.getElementById('regFullName').value;
+            const username = document.getElementById('regUsername').value;
+            const phone = document.getElementById('regPhone').value;
+            const password = document.getElementById('regPassword').value;
+            
+            // You'll need to implement the register API endpoint
+            alert('Registration - API endpoint needed');
+        }
+        
+        async function checkSession() {
+            try {
+                const response = await fetch('?action=api_get_current_user');
+                const data = await response.json();
+                
+                if (data.logged_in && data.user) {
+                    currentUser = data.user;
+                    document.getElementById('authScreen').style.display = 'none';
+                    document.getElementById('mainApp').style.display = 'flex';
+                    document.getElementById('profilePic').src = 'uploads/' + (currentUser.profile_pic || 'default.jpg');
+                    document.getElementById('welcomeUser').innerText = `Welcome back, ${currentUser.full_name}!`;
+                    
+                    await connectWebSocket();
+                    loadChats();
+                }
+            } catch (error) {
+                console.error('Session check error:', error);
+            }
+        }
+        
+        // WebSocket functions
+        async function connectWebSocket() {
+            try {
+                const response = await fetch('?action=api_get_ws_token');
+                const data = await response.json();
+                
+                if (data.error) {
+                    console.error('Failed to get token:', data.error);
+                    return;
+                }
+                
+                socket = io('http://localhost:3000', {
+                    auth: { token: data.token },
+                    transports: ['websocket']
+                });
+                
+                socket.on('connect', () => {
+                    console.log('Connected to WebSocket');
+                    socketConnected = true;
+                    document.getElementById('connectionStatus').classList.add('connected');
+                });
+                
+                socket.on('disconnect', () => {
+                    console.log('Disconnected from WebSocket');
+                    socketConnected = false;
+                    document.getElementById('connectionStatus').classList.remove('connected');
+                });
+                
+                socket.on('message-sent', (data) => {
+                    if (data.success) {
+                        messages.push(data.message);
+                        if (currentChat && currentChat.id === data.chatId) {
+                            renderMessages();
+                        }
+                    }
+                });
+                
+                socket.on('new-message', (data) => {
+                    if (currentChat && currentChat.id === data.chatId) {
+                        messages.push(data.message);
+                        renderMessages();
+                        
+                        // Mark as read
+                        socket.emit('mark-read', {
+                            chatId: currentChat.id,
+                            messageIds: [data.message.id]
+                        });
+                    } else {
+                        // Update unread count
+                        const chat = chats.find(c => c.id === data.chatId);
+                        if (chat) {
+                            chat.unread_count = (chat.unread_count || 0) + 1;
+                            renderChats();
+                        }
+                    }
+                    
+                    // Update chat list
+                    updateChatLastMessage(data.chatId, data.message);
+                });
+                
+                socket.on('user-typing', (data) => {
+                    if (currentChat && currentChat.id === data.chatId) {
+                        const typingDiv = document.getElementById('typingIndicator');
+                        if (data.isTyping) {
+                            if (!typingDiv) {
+                                const indicator = document.createElement('div');
+                                indicator.id = 'typingIndicator';
+                                indicator.className = 'typing-indicator';
+                                indicator.innerHTML = '<span></span><span></span><span></span>';
+                                document.getElementById('messagesContainer').appendChild(indicator);
+                            }
+                        } else {
+                            if (typingDiv) typingDiv.remove();
+                        }
+                    }
+                });
+                
+                socket.on('user-status', (data) => {
+                    // Update user status in UI
+                    updateUserStatus(data.userId, data.status);
+                });
+                
+                socket.on('chat-updated', () => {
+                    loadChats();
+                });
+                
+            } catch (error) {
+                console.error('WebSocket connection error:', error);
+            }
+        }
+        
+        // Chat functions
+        async function loadChats() {
+            if (!socket || !socketConnected) return;
+            
+            socket.emit('get-chats', {}, (response) => {
+                if (response.success) {
+                    chats = response.chats;
+                    renderChats();
+                }
+            });
+        }
+        
+        function renderChats() {
+            const container = document.getElementById('chatsList');
+            
+            if (!chats || chats.length === 0) {
+                container.innerHTML = '<div class="empty-state">No chats yet</div>';
+                return;
             }
             
-            try {
-                await fetch('?action=api_logout');
-                document.getElementById('authScreen').style.display = 'flex';
-                document.getElementById('mainApp').style.display = 'none';
-                currentChat = null;
-                showToast('Logged out successfully', 'success');
-            } catch (error) {
-                console.error('Logout error:', error);
+            container.innerHTML = '';
+            chats.forEach(chat => {
+                const chatItem = document.createElement('div');
+                chatItem.className = `chat-item ${currentChat && currentChat.id === chat.id ? 'active' : ''}`;
+                chatItem.onclick = () => selectChat(chat);
+                
+                const lastMessage = chat.last_message ? 
+                    (chat.last_sender_id === currentUser.id ? 'You: ' : '') + chat.last_message : 'No messages';
+                
+                chatItem.innerHTML = `
+                    <div class="chat-avatar-container">
+                        <img src="uploads/${chat.partner.pic || 'default.jpg'}" class="chat-avatar">
+                        <span class="online-indicator ${chat.partner.status === 'online' ? 'online' : ''}"></span>
+                    </div>
+                    <div class="chat-info">
+                        <div style="display: flex; justify-content: space-between;">
+                            <span class="chat-name">${escapeHtml(chat.partner.name)}</span>
+                            <span class="chat-time">${chat.last_message_time || ''}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span class="chat-last-message">${escapeHtml(lastMessage)}</span>
+                            ${chat.unread_count > 0 ? `<span class="unread-badge">${chat.unread_count}</span>` : ''}
+                        </div>
+                    </div>
+                `;
+                
+                container.appendChild(chatItem);
+            });
+        }
+        
+        function selectChat(chat) {
+            currentChat = chat;
+            
+            // Load messages
+            socket.emit('get-messages', { chatId: chat.id }, (response) => {
+                if (response.success) {
+                    messages = response.messages;
+                    renderChatView();
+                }
+            });
+        }
+        
+        function renderChatView() {
+            document.getElementById('chatArea').innerHTML = `
+                <div class="chat-header">
+                    <button class="back-button" onclick="showChatList()" style="display: none;">←</button>
+                    <img src="uploads/${currentChat.partner.pic || 'default.jpg'}" class="chat-header-avatar">
+                    <div class="chat-header-info">
+                        <h5>${escapeHtml(currentChat.partner.name)}</h5>
+                        <small id="chatStatus">${currentChat.partner.status === 'online' ? '🟢 online' : '○ offline'}</small>
+                    </div>
+                </div>
+                <div class="messages-container" id="messagesContainer"></div>
+                <div class="message-input-area">
+                    <div class="message-input-wrapper">
+                        <input type="text" id="messageInput" placeholder="Type a message" onkeypress="handleKeyPress(event)">
+                    </div>
+                    <div class="send-button" onclick="sendMessage()">
+                        <i class="fas fa-paper-plane"></i>
+                    </div>
+                </div>
+            `;
+            
+            renderMessages();
+        }
+        
+        function renderMessages() {
+            const container = document.getElementById('messagesContainer');
+            if (!container) return;
+            
+            container.innerHTML = '';
+            
+            messages.forEach(msg => {
+                const isSent = msg.sender_id == currentUser.id;
+                const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message-wrapper ${isSent ? 'sent' : 'received'}`;
+                messageDiv.innerHTML = `
+                    <div class="message-bubble">
+                        <div>${escapeHtml(msg.message)}</div>
+                        <div class="message-time">${time}</div>
+                    </div>
+                `;
+                
+                container.appendChild(messageDiv);
+            });
+            
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message || !currentChat || !socket || !socketConnected) {
+                alert('Cannot send message');
+                return;
+            }
+            
+            socket.emit('send-message', {
+                chatId: currentChat.id,
+                message: message
+            }, (response) => {
+                if (response.error) {
+                    alert(response.error);
+                } else {
+                    input.value = '';
+                }
+            });
+        }
+        
+        function handleKeyPress(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+                return;
+            }
+            
+            // Typing indicator
+            if (typingTimeout) clearTimeout(typingTimeout);
+            
+            socket.emit('typing', {
+                chatId: currentChat.id,
+                isTyping: true
+            });
+            
+            typingTimeout = setTimeout(() => {
+                socket.emit('typing', {
+                    chatId: currentChat.id,
+                    isTyping: false
+                });
+            }, 1000);
+        }
+        
+        function showChatList() {
+            document.getElementById('sidebar').classList.remove('hidden');
+        }
+        
+        function updateChatLastMessage(chatId, message) {
+            const chat = chats.find(c => c.id === chatId);
+            if (chat) {
+                chat.last_message = message.message;
+                chat.last_message_time = formatTime(message.created_at);
+                chat.last_sender_id = message.sender_id;
+                renderChats();
             }
         }
         
-        // Keep all other existing functions (switchTab, switchMainTab, loadChats, loadStatus, etc.)
-        // ... (include all functions from previous version) ...
+        function updateUserStatus(userId, status) {
+            chats.forEach(chat => {
+                if (chat.partner.id === userId) {
+                    chat.partner.status = status;
+                }
+            });
+            renderChats();
+            
+            if (currentChat && currentChat.partner.id === userId) {
+                const statusElement = document.getElementById('chatStatus');
+                if (statusElement) {
+                    statusElement.innerHTML = status === 'online' ? '🟢 online' : '○ offline';
+                }
+            }
+        }
         
-        // ========== UTILITIES ==========
+        function formatTime(datetime) {
+            if (!datetime) return '';
+            const date = new Date(datetime);
+            const now = new Date();
+            const diff = (now - date) / 1000;
+            
+            if (diff < 60) return 'just now';
+            if (diff < 3600) return Math.floor(diff / 60) + 'm';
+            if (diff < 86400) return Math.floor(diff / 3600) + 'h';
+            return date.toLocaleDateString();
+        }
+        
+        function showNewChat() {
+            newChatModal.show();
+            document.getElementById('userSearch').value = '';
+            document.getElementById('searchResults').innerHTML = '';
+        }
+        
         function escapeHtml(unsafe) {
             if (!unsafe) return '';
             return unsafe
@@ -886,29 +1151,6 @@ if ($action == 'api_get_ws_token') {
                 .replace(/>/g, "&gt;")
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#039;");
-        }
-        
-        function formatTime(datetime) {
-            const date = new Date(datetime);
-            const now = new Date();
-            const diff = (now - date) / 1000;
-            
-            if (diff < 60) return 'Just now';
-            if (diff < 3600) return Math.floor(diff / 60) + ' min ago';
-            if (diff < 86400) return Math.floor(diff / 3600) + ' hours ago';
-            if (diff < 604800) return date.toLocaleDateString('en-US', { weekday: 'long' });
-            return date.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
-        }
-        
-        function showToast(message, type = 'info') {
-            const toast = document.createElement('div');
-            toast.className = `toast-notification toast-${type}`;
-            toast.innerHTML = message;
-            document.body.appendChild(toast);
-            
-            setTimeout(() => {
-                toast.remove();
-            }, 3000);
         }
     </script>
 </body>

@@ -1,3 +1,4 @@
+
 <?php
 // ============================================
 // WHATSAPP-STYLE CHAT APPLICATION - FIXED LOGIN/REGISTER

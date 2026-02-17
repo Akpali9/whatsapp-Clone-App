@@ -1,4 +1,5 @@
-#WhatsApp Clone Features Implemented:
+
+WhatsApp Clone Features Implemented:
 1. Authentication Screen
 WhatsApp green theme
 
